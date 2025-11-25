@@ -1,9 +1,8 @@
-from flask import Flask, jsonify, request, render_template, send_from_directory
+from flask import Flask, jsonify, request, render_template
 from flask_cors import CORS
 import sqlite3
 import os
 import time
-import threading
 from datetime import datetime
 
 # ------------------ App setup ------------------
@@ -71,181 +70,89 @@ CREATE TABLE IF NOT EXISTS history (
 )
 """)
 
-
-
 # ------------------ ESP32/DEVICE ROUTES ------------------
 @app.route("/health")
 def health_check():
     """mDNS/health check endpoint for devices"""
     return "mDNS OK"
 
-@app.route("/check_schedule", methods=["POST"])
-def check_schedule():
-    """Check if a module should dispense food now"""
-    module_id = request.form.get("module_id")
+@app.route("/check_sched", methods=["GET"])
+def check_sched():
+    """Check if a device should dispense food now"""
+    device_id = request.args.get("device_id")
     
-    if not module_id:
-        return jsonify({"error": "Missing module_id"}), 400
-    
-    # Verify module exists and is active
-    module = query_db("""
-        SELECT module_id FROM modules
-        WHERE module_id=? AND status='active'
-    """, (module_id,), one=True)
-    
-    if not module:
-        return jsonify({"error": "Invalid or inactive module_id"}), 404
+    if not device_id:
+        return jsonify({"error": "Missing device_id"}), 400
     
     # Get current time in HH:MM format
     now = datetime.now().strftime("%H:%M")
     
-    # Check for pending schedules at or before current time
+    # Check for pending schedules at current time
     row = query_db("""
-        SELECT schedule_id, amount, feed_time FROM schedules
-        WHERE module_id=? AND feed_time<=? AND status='pending'
-        ORDER BY feed_time ASC
-        LIMIT 1
-    """, (module_id, now), one=True)
+        SELECT schedule_id, amount FROM schedules
+        WHERE module_id=? AND feed_time=? AND status='pending'
+    """, (device_id, now), one=True)
     
     if row:
+        # Mark schedule as done
+        query_db("""
+            UPDATE schedules SET status='done' WHERE schedule_id=?
+        """, (row['schedule_id'],))
+        
+        # Add to history
+        query_db("""
+            INSERT INTO history (schedule_id) VALUES (?)
+        """, (row['schedule_id'],))
+        
         return jsonify({
             "dispense": True, 
             "amount": row['amount'],
-            "schedule_id": row['schedule_id'],
-            "scheduled_time": row['feed_time']
+            "schedule_id": row['schedule_id']
         })
     else:
         return jsonify({"dispense": False})
-    
-@app.route("/complete_schedule", methods=["POST"])
-def complete_schedule():
-    """Mark a schedule as done and add to history"""
-    schedule_id = request.form.get("schedule_id")
-    module_id = request.form.get("module_id")  # For verification
-    
-    if not schedule_id:
-        return jsonify({"error": "Missing schedule_id"}), 400
-    
-    # Verify schedule exists and is still pending
-    schedule = query_db("""
-        SELECT schedule_id, module_id, status FROM schedules
-        WHERE schedule_id=?
-    """, (schedule_id,), one=True)
-    
-    if not schedule:
-        return jsonify({"error": "Schedule not found"}), 404
-    
-    if schedule['status'] == 'done':
-        return jsonify({"error": "Schedule already completed"}), 400
-    
-    # Optional: Verify module_id matches (security check)
-    if module_id and schedule['module_id'] != module_id:
-        return jsonify({"error": "Module ID mismatch"}), 403
-    
-    # Mark schedule as done
-    query_db("""
-        UPDATE schedules SET status='done' 
-        WHERE schedule_id=?
-    """, (schedule_id,))
-    
-    # Add to history
-    query_db("""
-        INSERT INTO history (schedule_id) VALUES (?)
-    """, (schedule_id,))
-    
-    print(f"Schedule {schedule_id} completed by module {schedule['module_id']}")
-    
-    return jsonify({
-        "success": True,
-        "message": "Schedule completed successfully",
-        "schedule_id": schedule_id
-    })
 
 @app.route("/weight_update", methods=["POST"])
 def weight_update():
     """Update module weight from ESP32"""
-    module_id = request.form.get("module_id")
+    device_id = request.form.get("device_id")
     weight = request.form.get("weight")
     
-    if not module_id or weight is None:
-        return jsonify({"error": "Missing module_id or weight"}), 400
+    if not device_id or weight is None:
+        return jsonify({"error": "Missing device_id or weight"}), 400
     
-    # Validate weight value
-    try:
-        weight_value = float(weight)
-        if weight_value < 0 or weight_value > 10000:  # Max 10kg
-            return jsonify({"error": "Invalid weight value"}), 400
-    except ValueError:
-        return jsonify({"error": "Weight must be a number"}), 400
-    
-    print(f"Weight update - Device: {module_id}, Weight: {weight_value}g")
+    print(f"Weight update - Device: {device_id}, Weight: {weight}")
     
     # Check if module exists
     existing = query_db("""
         SELECT module_id FROM modules WHERE module_id=?
-    """, (module_id,), one=True)
+    """, (device_id,), one=True)
     
     if existing:
-        # Update existing module with timestamp
+        # Update existing module
         query_db("""
-            UPDATE modules 
-            SET weight=?, status='active'
-            WHERE module_id=?
-        """, (weight_value, module_id))
+            UPDATE modules SET weight=?, status='active' WHERE module_id=?
+        """, (float(weight), device_id))
     else:
-        # Reject new modules (require manual registration for security)
-        return jsonify({
-            "error": "Module not registered. Please register module first."
-        }), 403
+        # Insert new module (assign to first available camera or default)
+        cam_result = query_db("SELECT cam_id FROM camera LIMIT 1", one=True)
+        cam_id = cam_result['cam_id'] if cam_result else "CAMERA01"
+        
+        query_db("""
+            INSERT INTO modules (module_id, cam_id, status, weight)
+            VALUES (?, ?, 'active', ?)
+        """, (device_id, cam_id, float(weight)))
     
     return jsonify({
         "success": True,
-        "message": f"Weight updated for {module_id}: {weight_value}g"
+        "message": f"Weight updated for {device_id}: {weight}g"
     })
 
-# API: Delete specific snapshot
-@app.route('/api/snapshots/<filename>', methods=['DELETE'])
-def delete_snapshot(filename):
-    image_dir = 'instance/images'
-    try:
-        filepath = os.path.join(image_dir, filename)
-       
-        # Check if file exists
-        if not os.path.exists(filepath):
-            return jsonify({'success': False, 'error': 'File not found'}), 404
-       
-        # Security check: ensure filename doesn't contain path traversal
-        if '..' in filename or '/' in filename or '\\' in filename:
-            return jsonify({'success': False, 'error': 'Invalid filename'}), 400
-       
-        # Delete the file
-        os.remove(filepath)
-        print(f"Deleted image: {filename}")
-       
-        return jsonify({'success': True, 'message': f'Image {filename} deleted successfully'})
-    except Exception as e:
-        print(f"Error deleting image {filename}: {str(e)}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-        
 @app.route("/upload_image", methods=["POST"])
 def upload_image():
-    """Receive image from ESP32-CAM"""  
-    camera_id = request.form.get("camera_id")
+    """Receive image from ESP32-CAM"""
+    image = request.data
     
-    if not camera_id:
-        return jsonify({"error": "Missing camera_id"}), 400
-    
-    # Verify camera exists and is active
-    camera = query_db("""
-        SELECT cam_id FROM camera
-        WHERE cam_id=? AND status='active'
-    """, (camera_id,), one=True)
-    
-    if not camera:
-        return jsonify({"error": "Invalid or inactive camera_id"}), 404
-    
-    # Get image data
-    image = request.files.get('image')
     if not image:
         return jsonify({"error": "No image data"}), 400
     
@@ -253,21 +160,19 @@ def upload_image():
     images_dir = os.path.join(app.instance_path, 'images')
     os.makedirs(images_dir, exist_ok=True)
     
-    # Save with camera_id and timestamp in filename
-    timestamp = int(time.time())
-    filename = f"{camera_id}_{timestamp}.jpg"
+    # Save with timestamp
+    filename = f"cam_{int(time.time())}.jpg"
     filepath = os.path.join(images_dir, filename)
     
-    image.save(filepath)
-    file_size = os.path.getsize(filepath)
+    with open(filepath, "wb") as f:
+        f.write(image)
     
-    print(f"Saved: {filename}, Size: {file_size} bytes, Camera: {camera_id}")
+    print(f"Saved: {filename}, Size: {len(image)} bytes")
     
     return jsonify({
         "success": True,
         "filename": filename,
-        "size": file_size,
-        "camera_id": camera_id
+        "size": len(image)
     }), 200
 
 # ------------------ CAMERA ROUTES ------------------
@@ -294,56 +199,6 @@ def update_camera(cam_id):
 def delete_camera(cam_id):
     query_db("DELETE FROM camera WHERE cam_id = ?", (cam_id,))
     return jsonify({"success": True})
-
-# ------------------ CAMERA ROUTES FOR WEBVIEW ------------------
-
-# API: Get list of all captured images
-@app.route('/api/snapshots', methods=['GET'])
-def get_snapshots():
-    image_dir = 'instance/images'
-    try:
-        # Check if directory exists
-        if not os.path.exists(image_dir):
-            os.makedirs(image_dir)
-            return jsonify({'success': True, 'images': []})
-        
-        # Get all image files
-        images = [f for f in os.listdir(image_dir) 
-                  if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
-        
-        # Sort by filename (newest first based on timestamp in name)
-        images.sort(reverse=True)
-        
-        return jsonify({'success': True, 'images': images})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
-
-# Serve individual snapshot image
-@app.route('/snapshots/<filename>')
-def serve_snapshot(filename):
-    try:
-        return send_from_directory('instance/images', filename)
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 404
-
-# API: Get snapshots for specific camera
-@app.route('/api/snapshots/<cam_id>', methods=['GET'])
-def get_camera_snapshots(cam_id):
-    image_dir = 'instance/images'
-    try:
-        if not os.path.exists(image_dir):
-            return jsonify({'success': True, 'images': []})
-        
-        # Filter images by camera ID
-        all_images = os.listdir(image_dir)
-        camera_images = [f for f in all_images 
-                        if f.startswith(f'CAMERA{cam_id}') or f.startswith(f'Camera{cam_id}')]
-        
-        camera_images.sort(reverse=True)
-        
-        return jsonify({'success': True, 'cam_id': cam_id, 'images': camera_images})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
 
 # ------------------ MODULE ROUTES ------------------
 @app.route("/modules", methods=["GET"])
@@ -449,10 +304,6 @@ def serve_history():
 def serve_feeders():
     return render_template("feeders.html")
 
-@app.route("/camera.html")
-def serve_camera():
-    return render_template("camera.html")
-
 # ------------------ Run App ------------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080, debug=True, threaded=True)
+    app.run(host="0.0.0.0", port=5000, debug=True, threaded=True)
