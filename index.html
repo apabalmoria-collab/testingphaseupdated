@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Modules</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/analytics.css">
+</head>
+<body>
+    <nav>
+        <a href="/">Home</a> |
+        <a href="/module.html">Modules</a> |
+        <a href="/schedule.html">Schedules</a> |
+        <a href="/history.html">History</a> |
+        <a href="/camera.html">Camera</a>
+    </nav>
+    
+    <h2>Module List</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Module ID</th>
+                <th>Camera ID</th>
+                <th>Status</th>
+                <th>Weight</th>
+            </tr>
+        </thead>
+        <tbody id="moduleTableBody">
+            <tr>
+                <td colspan="4">Loading...</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <!-- Analytics Section -->
+    <h2 style="margin-top: 3rem;">Analytics Overview</h2>
+    
+    <!-- Summary Cards -->
+    <div class="analytics-summary">
+        <div class="summary-card">
+            <div class="summary-label">Total Fed Today</div>
+            <div class="summary-value" id="totalFedToday">0g</div>
+        </div>
+        
+        <div class="summary-card">
+            <div class="summary-label">Active Modules</div>
+            <div class="summary-value" id="activeModules">0/0</div>
+        </div>
+    </div>
+
+    <!-- Charts -->
+    <div class="analytics-charts">
+        <!-- Weekly Feeding Chart -->
+        <div class="chart-container">
+            <h3>Weekly Feeding Overview</h3>
+            <canvas id="weeklyChart"></canvas>
+        </div>
+
+        <!-- Module Status Chart -->
+        <div class="chart-container">
+            <h3>Module Status Distribution</h3>
+            <canvas id="statusChart"></canvas>
+        </div>
+    </div>
+
+    <script src="/static/scripts/chart.min.js"></script>
+    <script src="/static/scripts/index.js"></script>
+    <script src="/static/scripts/analytics.js"></script>
+</body>
+</html>
