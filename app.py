@@ -233,8 +233,9 @@ def delete_snapshot(filename):
         
 @app.route("/upload_image", methods=["POST"])
 def upload_image():
-    """Receive image from ESP32-CAM"""  
-    camera_id = request.form.get("camera_id")
+    """Receive image from ESP32-CAM with image type"""  
+    camera_id = request.args.get("camera_id") or request.form.get("camera_id")
+    image_type = request.args.get("image_type") or request.form.get("image_type") or "during"
     
     if not camera_id:
         return jsonify({"error": "Missing camera_id"}), 400
@@ -259,19 +260,20 @@ def upload_image():
     
     # Save with camera_id and timestamp in filename
     timestamp = int(time.time())
-    filename = f"{camera_id}_{timestamp}.jpg"
+    filename = f"{camera_id}_{timestamp}_{image_type}.jpg"
     filepath = os.path.join(images_dir, filename)
     
     image.save(filepath)
     file_size = os.path.getsize(filepath)
     
-    print(f"Saved: {filename}, Size: {file_size} bytes, Camera: {camera_id}")
+    print(f"Saved: {filename}, Size: {file_size} bytes, Camera: {camera_id}, Type: {image_type}")
     
     return jsonify({
         "success": True,
         "filename": filename,
         "size": file_size,
-        "camera_id": camera_id
+        "camera_id": camera_id,
+        "image_type": image_type
     }), 200
 
 # ------------------ CAMERA ROUTES ------------------
