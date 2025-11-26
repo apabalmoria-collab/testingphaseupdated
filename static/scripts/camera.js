@@ -10,13 +10,16 @@ function loadSnapshots() {
    
     duringGallery.innerHTML = '<div class="loading">Loading images...</div>';
     afterGallery.innerHTML = '<div class="loading">Loading images...</div>';
-
+   
     fetch('/api/snapshots')
         .then(response => response.json())
         .then(data => {
-            if (data.success && data.images.length > 0) {
-                categorizeAndDisplayImages(data.images);
+            console.log('API Response:', data); // Debug log
+           
+            if (data.success && data.images && data.images.length > 0) {
+                displayCategorizedImages(data.images);
             } else {
+                console.log('No images found or empty response');
                 showEmptyState(duringGallery, 'during');
                 showEmptyState(afterGallery, 'after');
             }
@@ -28,61 +31,35 @@ function loadSnapshots() {
         });
 }
 
-// Categorize images into during/after feeding based on timing
-function categorizeAndDisplayImages(images) {
-    const duringImages = [];
-    const afterImages = [];
-
-    // Use filename labels instead of timestamp calculation
-    images.forEach(filename => {
-        // Extract type from filename: CAMERA01_1732584234_during.jpg
-        const parts = filename.replace('.jpg', '').split('_');
-       
-        if (parts.length >= 3) {
-            const imageType = parts[2]; // "during" or "after"
-           
-            if (imageType === 'after') {
-                afterImages.push(filename);
-            } else {
-                duringImages.push(filename);
-            }
-        } else {
-            // Old format without type - default to "during"
-            duringImages.push(filename);
-        }
-    });
-
-    // Sort by timestamp (newest first)
-    const sortNewest = (a, b) => {
-        const timeA = parseInt(a.split('_')[1]) || 0;
-        const timeB = parseInt(b.split('_')[1]) || 0;
-        return timeB - timeA;
-    };
-   
-    duringImages.sort(sortNewest);
-    afterImages.sort(sortNewest);
-
-    displayCategorizedImages(duringImages, afterImages);
-}
-
-// Display categorized images
-function displayCategorizedImages(duringImages, afterImages) {
+// Display categorized images from database
+function displayCategorizedImages(images) {
     const duringGallery = document.getElementById('duringFeedingGallery');
     const afterGallery = document.getElementById('afterFeedingGallery');
-
+   
+    console.log('Total images received:', images.length); // Debug log
+   
+    // Separate images by category (already stored in database)
+    const duringImages = images.filter(img => img.category === 'during');
+    const afterImages = images.filter(img => img.category === 'after');
+   
+    console.log('During images:', duringImages.length); // Debug log
+    console.log('After images:', afterImages.length); // Debug log
+   
+    // Display During Feeding images
     if (duringImages.length > 0) {
         duringGallery.innerHTML = '';
-        duringImages.forEach(filename => {
-            duringGallery.appendChild(createGalleryItem(filename));
+        duringImages.forEach(imageData => {
+            duringGallery.appendChild(createGalleryItem(imageData));
         });
     } else {
         showEmptyState(duringGallery, 'during');
     }
-
+   
+    // Display After Feeding images
     if (afterImages.length > 0) {
         afterGallery.innerHTML = '';
-        afterImages.forEach(filename => {
-            afterGallery.appendChild(createGalleryItem(filename));
+        afterImages.forEach(imageData => {
+            afterGallery.appendChild(createGalleryItem(imageData));
         });
     } else {
         showEmptyState(afterGallery, 'after');
@@ -104,22 +81,23 @@ function showEmptyState(gallery, type) {
 }
 
 // Create individual gallery item
-function createGalleryItem(filename) {
+function createGalleryItem(imageData) {
     const div = document.createElement('div');
     div.className = 'gallery-item';
    
-    // Extract info from filename
-    const parts = filename.replace('.jpg', '').split('_');
-    const cameraId = parts[0] || 'Unknown';
-    const timestamp = parts[1] || 'Unknown';
+    const filename = imageData.filename;
+    const cameraId = imageData.camera_id || 'Unknown';
+    const timestamp = imageData.timestamp || 'Unknown';
+    const category = imageData.category || 'unknown';
+   
+    console.log('Creating gallery item:', filename, 'Category:', category); // Debug log
    
     div.innerHTML = `
-        <img src="/snapshots/${filename}"
-             alt="${filename}"
-             onclick="openModal('${filename}'); event.stopPropagation();">
+        <img src="/snapshots/${filename}" alt="${filename}" onclick="openModal('${filename}'); event.stopPropagation();">
         <div class="info">
             <p class="timestamp">${formatTimestamp(timestamp)}</p>
-            <p>📷 Captured by ${cameraId}</p>
+            <p>📷 ${cameraId}</p>
+            <p style="font-size: 11px; color: #999;">Category: ${category}</p>
             <p style="font-size: 12px; color: #999;">${filename}</p>
             <button class="delete-btn" onclick="deleteImage('${filename}'); event.stopPropagation();">
                 🗑️ Delete
@@ -132,7 +110,7 @@ function createGalleryItem(filename) {
 
 // Format timestamp
 function formatTimestamp(timestamp) {
-    if (timestamp === 'Unknown') return 'Unknown Time';
+    if (timestamp === 'Unknown' || !timestamp) return 'Unknown Time';
    
     try {
         const date = new Date(parseInt(timestamp) * 1000);
@@ -158,20 +136,19 @@ function deleteImage(filename) {
     fetch(`/api/snapshots/${filename}`, {
         method: 'DELETE'
     })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            alert('✓ Image deleted successfully!');
-            refreshGallery();
-        } else {
-            alert('✗ Failed to delete image: ' + (data.error || 'Unknown error'));
-        }
-    })
-    .catch(error => {
-        console.error('Error deleting image:', error);
-        alert('✗ Error delating image. Please try again.');
-
-    });
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                alert('✓ Image deleted successfully!');
+                refreshGallery();
+            } else {
+                alert('✗ Failed to delete image: ' + (data.error || 'Unknown error'));
+            }
+        })
+        .catch(error => {
+            console.error('Error deleting image:', error);
+            alert('✗ Error deleting image. Please try again.');
+        });
 }
 
 // Refresh gallery
@@ -182,6 +159,7 @@ function refreshGallery() {
 // Open image in modal
 function openModal(filename) {
     let modal = document.getElementById('imageModal');
+   
     if (!modal) {
         modal = document.createElement('div');
         modal.id = 'imageModal';
